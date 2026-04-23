@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 · 精选商城</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="auth-page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-stack" role="status">
+        {% for category, message in messages %}
+        <p class="flash flash--{{ category }}">{{ message }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+    <header class="site-header">
+        <div class="header-inner">
+            <a class="logo" href="{{ url_for('index') }}">精选商城</a>
+            <nav class="header-nav">
+                <a href="{{ url_for('index') }}">首页</a>
+                <a href="{{ url_for('register') }}">注册</a>
+            </nav>
+        </div>
+    </header>
+    <main class="main-content auth-page__main">
+        <section class="panel auth-panel">
+            <h1>登录</h1>
+            <form class="auth-form" method="post" action="{{ url_for('login') }}">
+                {% if request.args.get('next') %}
+                <input type="hidden" name="next" value="{{ request.args.get('next') }}">
+                {% endif %}
+                <label class="auth-form__label" for="login-email">邮箱</label>
+                <input class="auth-form__input" id="login-email" name="email" type="email" autocomplete="username" required value="{{ request.form.email or '' }}">
+
+                <label class="auth-form__label" for="login-password">密码</label>
+                <input class="auth-form__input" id="login-password" name="password" type="password" autocomplete="current-password" required>
+
+                <button type="submit" class="btn btn-primary auth-form__submit">登录</button>
+            </form>
+            <p class="auth-panel__footer">还没有账号？<a href="{{ url_for('register') }}">注册</a></p>
+        </section>
+    </main>
+    <footer class="site-footer">
+        <p>Shopping Platform · 演示商城</p>
+    </footer>
+</body>
+</html>

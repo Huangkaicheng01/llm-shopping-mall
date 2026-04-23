@@ -1,0 +1,45 @@
+{# 首页侧栏推荐卡片：悬停遮罩 + 收藏 / 不喜欢（不喜欢会屏蔽该商品所属类目） #}
+<article class="rec-card rec-card--hoverable">
+    <div class="rec-card__main">
+        <div class="rec-card__media">
+            <img src="{{ url_for('static', filename=product.image) }}" alt="" loading="lazy" width="120" height="80">
+        </div>
+        <div class="rec-card__text">
+            <h3 class="rec-card__title">{{ product.title }}</h3>
+            <p class="rec-card__price">￥{{ '%.2f'|format(product.price) }}</p>
+            <p class="rec-card__desc">{{ product.description }}</p>
+        </div>
+    </div>
+    <div class="rec-card__overlay" aria-hidden="true">
+        <div class="rec-card__overlay-actions">
+            {% if rec_user_id %}
+            <form method="post" action="{{ url_for('rec_favorite') }}" class="rec-overlay-form{% if rec_sidebar_ajax|default(true) %} js-no-full-reload{% endif %}">
+                <input type="hidden" name="user_id" value="{{ rec_user_id }}">
+                <input type="hidden" name="product_id" value="{{ product.product_id }}">
+                <input type="hidden" name="back" value="{{ rec_back }}">
+                {% if search_query %}
+                <input type="hidden" name="next_q" value="{{ search_query }}">
+                {% endif %}
+                {% if active_category %}
+                <input type="hidden" name="next_category" value="{{ active_category }}">
+                {% endif %}
+                <button type="submit" class="rec-overlay-btn rec-overlay-btn--fav">收藏</button>
+            </form>
+            <form method="post" action="{{ url_for('rec_dislike_category') }}" class="rec-overlay-form{% if rec_sidebar_ajax|default(true) %} js-no-full-reload{% endif %}">
+                <input type="hidden" name="user_id" value="{{ rec_user_id }}">
+                <input type="hidden" name="category" value="{{ product.category }}">
+                <input type="hidden" name="back" value="{{ rec_back }}">
+                {% if search_query %}
+                <input type="hidden" name="next_q" value="{{ search_query }}">
+                {% endif %}
+                {% if active_category %}
+                <input type="hidden" name="next_category" value="{{ active_category }}">
+                {% endif %}
+                <button type="submit" class="rec-overlay-btn rec-overlay-btn--dislike">我不喜欢</button>
+            </form>
+            {% else %}
+            <p class="rec-overlay-login-hint"><a href="{{ url_for('login', next=request.path) }}">登录</a> 后可收藏或屏蔽类目。</p>
+            {% endif %}
+        </div>
+    </div>
+</article>

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>为您推荐 · Shopping Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-stack" role="status">
+        {% for category, message in messages %}
+        <p class="flash flash--{{ category }}">{{ message }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+    <header class="site-header">
+        <div class="header-inner">
+            <a class="logo" href="{{ url_for('index') }}">精选商城</a>
+            <nav class="header-nav">
+                <a href="{{ url_for('index') }}">首页</a>
+                <a href="{{ url_for('recommendations') }}" aria-current="page">为您推荐</a>
+            </nav>
+            <form class="search-form" action="{{ url_for('index') }}" method="get" role="search">
+                <label class="visually-hidden" for="search-q-rec">搜索商品</label>
+                <input id="search-q-rec" type="search" name="q" placeholder="搜索商品名称、分类或描述…" autocomplete="off">
+                <button type="submit">搜索</button>
+            </form>
+            <div class="header-user">
+                {% if current_user %}
+                <a href="{{ url_for('account') }}" class="header-user__avatar" title="用户中心：{{ current_user.name }}">{{ (current_user.name or current_user.email or '?')[0] }}</a>
+                <form class="header-user__logout" action="{{ url_for('logout') }}" method="post">
+                    <button type="submit" class="header-user__link">退出</button>
+                </form>
+                {% else %}
+                <a href="{{ url_for('login', next=request.full_path) }}" class="header-user__link">登录</a>
+                <a href="{{ url_for('register') }}" class="header-user__link header-user__link--primary">注册</a>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <section class="hero">
+            <h1>为您推荐</h1>
+            <p class="hero-sub">根据您在首页浏览、购买所积累的<strong>兴趣标签</strong>（与商品类目对应），在相应类目下为您挑选商品。</p>
+        </section>
+
+        {% if recommended.empty %}
+        <p class="empty-state">暂无推荐：请先在首页浏览或购买商品以积累兴趣标签，再返回本页查看。</p>
+        {% else %}
+        <div class="product-grid recommend-rec-grid">
+            {% for product in recommended.itertuples() %}
+            {% include '_rec_sidebar_card.html' %}
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <p style="margin-top: 2rem; text-align: center;">
+            <a href="{{ url_for('index') }}" style="color: var(--accent); font-weight: 600;">返回商品列表</a>
+        </p>
+    </main>
+
+    <footer class="site-footer">
+        <p>Shopping Platform · 演示商城</p>
+    </footer>
+    {% include '_live_reload.html' %}
+</body>
+</html>

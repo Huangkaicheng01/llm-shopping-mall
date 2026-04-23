@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>精选商城 · Shopping Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body data-llm-enabled="{{ '1' if llm_enabled else '0' }}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-stack" role="status">
+        {% for category, message in messages %}
+        <p class="flash flash--{{ category }}">{{ message }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+    <header class="site-header">
+        <div class="header-inner">
+            <a class="logo" href="{{ url_for('index') }}">精选商城</a>
+            <nav class="header-nav">
+                <a href="{{ url_for('index') }}">首页</a>
+                <a href="{{ url_for('recommendations') }}">为您推荐</a>
+            </nav>
+            <form class="search-form" action="{{ url_for('index') }}" method="get" role="search">
+                <label class="visually-hidden" for="search-q">搜索商品</label>
+                {% if active_category %}
+                <input type="hidden" name="category" value="{{ active_category }}">
+                {% endif %}
+                <input
+                    id="search-q"
+                    type="search"
+                    name="q"
+                    value="{{ search_query }}"
+                    placeholder="搜索商品名称、分类或描述…"
+                    autocomplete="off"
+                >
+                <button type="submit">搜索</button>
+            </form>
+            <button type="button" class="header-llm-btn" id="llm-open-btn" aria-haspopup="dialog" aria-controls="llm-dialog" {% if not llm_enabled %}disabled title="请先在 .env 中配置 API 密钥（通义需同时配置 LLM_API_BASE）"{% endif %}>
+                智能找货
+            </button>
+            <div class="header-user">
+                {% if current_user %}
+                <a href="{{ url_for('account') }}" class="header-user__avatar" title="用户中心：{{ current_user.name }}">{{ (current_user.name or current_user.email or '?')[0] }}</a>
+                <form class="header-user__logout" action="{{ url_for('logout') }}" method="post">
+                    <button type="submit" class="header-user__link">退出</button>
+                </form>
+                {% else %}
+                <a href="{{ url_for('login', next=request.full_path) }}" class="header-user__link">登录</a>
+                <a href="{{ url_for('register') }}" class="header-user__link header-user__link--primary">注册</a>
+                {% endif %}
+            </div>
+        </div>
+    </header>
+
+    <div class="llm-backdrop" id="llm-backdrop" hidden></div>
+    <div class="llm-dialog" id="llm-dialog" role="dialog" aria-modal="true" aria-labelledby="llm-dialog-title" hidden>
+        <div class="llm-dialog__head">
+            <h2 id="llm-dialog-title">一句话找商品</h2>
+            <button type="button" class="llm-dialog__close" id="llm-close-btn" aria-label="关闭">×</button>
+        </div>
+        <p class="llm-dialog__hint">用自然语言描述需求（例如：预算 500 以内送朋友的运动装备）。将调用云端大模型解析条件并匹配本店商品。</p>
+        <label class="visually-hidden" for="llm-query">需求描述</label>
+        <textarea id="llm-query" class="llm-dialog__textarea" rows="4" placeholder="输入您的需求…" maxlength="4000"></textarea>
+        <div class="llm-dialog__actions">
+            <button type="button" class="llm-dialog__submit" id="llm-submit-btn">生成推荐</button>
+        </div>
+        <p class="llm-dialog__meta" id="llm-meta" hidden></p>
+        <div class="llm-dialog__results" id="llm-results"></div>
+    </div>
+
+    <div class="product-detail-backdrop" id="product-detail-backdrop" hidden></div>
+    <div class="product-detail-dialog" id="product-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="product-detail-title" hidden>
+        <button type="button" class="product-detail-dialog__close" id="product-detail-close" aria-label="关闭">×</button>
+        <div class="product-detail-dialog__media">
+            <img id="product-detail-img" src="" alt="">
+        </div>
+        <div class="product-detail-dialog__body">
+            <p class="product-detail-dialog__cat" id="product-detail-cat"></p>
+            <h2 id="product-detail-title" class="product-detail-dialog__title"></h2>
+            <p class="product-detail-dialog__price" id="product-detail-price"></p>
+            <div class="product-detail-dialog__desc" id="product-detail-desc"></div>
+        </div>
+    </div>
+
+    {% macro catalog_url(sel_cat, q) -%}
+    {%- set qq = (q or '') | trim -%}
+    {%- if sel_cat and qq -%}{{ url_for('index', category=sel_cat, q=qq) }}
+    {%- elif sel_cat -%}{{ url_for('index', category=sel_cat) }}
+    {%- elif qq -%}{{ url_for('index', q=qq) }}
+    {%- else -%}{{ url_for('index') }}
+    {%- endif -%}
+    {%- endmacro %}
+
+    <main class="main-content">
+        <section class="hero">
+            <!-- <h1>欢迎来到精选商城</h1> -->
+            <p class="hero-sub">浏览商品、搜索心仪好物；{% if current_user %}您的浏览与购买会累计兴趣标签，右侧「为您推荐」按标签权重在对应类目下挑选商品。{% else %}登录后可记录行为、累计兴趣标签并在右侧查看按标签推荐的商品。{% endif %}</p>
+        </section>
+
+        <div class="catalog-with-rec">
+            <div class="catalog-with-rec__main">
+                <section class="section catalog-section" aria-labelledby="catalog-heading">
+                    <div class="section-head">
+                        <h2 id="catalog-heading">商品列表</h2>
+                        <nav class="category-nav" aria-label="商品类目">
+                            <a href="{{ catalog_url('', search_query) }}" class="category-pill {% if not active_category %}is-active{% endif %}">全部</a>
+                            {% for c in product_categories %}
+                            <a href="{{ catalog_url(c, search_query) }}" class="category-pill {% if active_category == c %}is-active{% endif %}">{{ c }}</a>
+                            {% endfor %}
+                        </nav>
+                        {% if search_query or active_category %}
+                        <p class="section-meta">
+                            {% if active_category %}类目：<strong>{{ active_category }}</strong>{% endif %}
+                            {% if search_query %}{% if active_category %} · {% endif %}关键词「<strong>{{ search_query }}</strong>」{% endif %}
+                            · <a href="{{ url_for('index') }}">清除筛选</a>
+                        </p>
+                        {% endif %}
+                    </div>
+
+                    {% if products.empty %}
+                    <p class="empty-state">当前条件下没有商品，试试其他类目或搜索关键词。</p>
+                    {% else %}
+                    <div class="product-grid">
+                        {% for product in products.itertuples() %}
+                        {% set pd = {
+                            'product_id': product.product_id|int,
+                            'title': product.title,
+                            'category': product.category,
+                            'description': product.description,
+                            'price': product.price|float,
+                            'image': product.image
+                        } %}
+                        <article class="product-card" data-product='{{ pd | tojson }}'>
+                            <div class="product-card__media">
+                                <img src="{{ url_for('static', filename=product.image) }}" alt="" loading="lazy" width="600" height="400">
+                            </div>
+                            <div class="product-card__body">
+                                <p class="product-card__category">{{ product.category }}</p>
+                                <h3 class="product-card__title">{{ product.title }}</h3>
+                                <p class="product-card__price">￥{{ '%.2f'|format(product.price) }}</p>
+                                <p class="product-card__desc">{{ product.description }}</p>
+                                {% if current_user %}
+                                <form class="product-card__actions js-no-full-reload" action="{{ url_for('interact') }}" method="POST">
+                                    <input type="hidden" name="user_id" value="{{ current_user.user_id }}">
+                                    <input type="hidden" name="product_id" value="{{ product.product_id }}">
+                                    {% if search_query %}
+                                    <input type="hidden" name="next_q" value="{{ search_query }}">
+                                    {% endif %}
+                                    {% if active_category %}
+                                    <input type="hidden" name="next_category" value="{{ active_category }}">
+                                    {% endif %}
+                                    <button type="button" class="btn btn-secondary js-open-product-detail">浏览</button>
+                                    <button type="submit" name="action" value="purchase" class="btn btn-primary">购买</button>
+                                </form>
+                                {% else %}
+                                <div class="product-card__actions product-card__actions--guest">
+                                    <button type="button" class="btn btn-secondary js-open-product-detail js-guest-product-detail">浏览</button>
+                                    <a class="btn btn-primary" href="{{ url_for('login', next=request.full_path) }}">购买</a>
+                                    <p class="product-card__guest-note"><a href="{{ url_for('login', next=request.full_path) }}">登录</a> 后记录浏览并累计兴趣标签。</p>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </article>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </section>
+            </div>
+
+            <aside class="recommend-sidebar" aria-labelledby="rec-heading">
+                <div class="recommend-sidebar__panel panel">
+                    <h2 id="rec-heading">为您推荐</h2>
+                    <div class="recommend-grid" id="recommend-grid-root">
+                        {% if recommended.empty %}
+                        <p class="rec-empty">{% if rec_user_id %}请先在左侧浏览或购买商品以积累兴趣标签，系统将按标签权重在对应类目下为您推荐。{% else %}请先<a href="{{ url_for('login', next=request.path) }}">登录</a>，登录后浏览或购买商品即可在此看到个性化推荐。{% endif %}</p>
+                        {% else %}
+                        {% for product in recommended.itertuples() %}
+                        {% include '_rec_sidebar_card.html' %}
+                        {% endfor %}
+                        {% endif %}
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </main>
+
+    <aside class="activity-float" aria-label="最近用户行为">
+        <details class="activity-float__details" open>
+            <summary class="activity-float__summary">
+                <span class="activity-float__title">最近用户行为</span>
+            </summary>
+            <div class="activity-float__body">
+                <ul class="activity-list" id="activity-list-root" aria-label="用户行为记录">
+                    {% if user_activity.empty %}
+                    <li class="activity-empty">暂无记录，浏览或购买商品后将显示在这里。</li>
+                    {% else %}
+                    {% for action in user_activity.itertuples() %}
+                    <li>
+                        <span class="activity-badge activity-badge--{{ action.action }}">{{ action.action }}</span>
+                        <span>商品 ID {{ action.product_id }} · {{ action.title }}</span>
+                    </li>
+                    {% endfor %}
+                    {% endif %}
+                </ul>
+            </div>
+        </details>
+    </aside>
+
+    <footer class="site-footer">
+        <p>Shopping Platform · 演示商城</p>
+    </footer>
+    <script>
+    (function () {
+      var llmApi = {{ url_for('api_llm_recommend') | tojson }};
+      var staticBase = {{ (url_for('static', filename='a')[:-1]) | tojson }};
+      var interactUrl = {{ url_for('interact') | tojson }};
+      var favUrl = {{ url_for('rec_favorite') | tojson }};
+      var dislikeUrl = {{ url_for('rec_dislike_category') | tojson }};
+      var recUserId = {{ rec_user_id | tojson }};
+      var loginNextUrl = {{ request.full_path | tojson }};
+      var loginUrlBase = {{ url_for('login') | tojson }};
+      var backdrop = document.getElementById('llm-backdrop');
+      var dialog = document.getElementById('llm-dialog');
+      var openBtn = document.getElementById('llm-open-btn');
+      var closeBtn = document.getElementById('llm-close-btn');
+      var queryEl = document.getElementById('llm-query');
+      var submitBtn = document.getElementById('llm-submit-btn');
+      var metaEl = document.getElementById('llm-meta');
+      var resultsEl = document.getElementById('llm-results');
+
+      function openLlm() {
+        if (document.body.getAttribute('data-llm-enabled') !== '1') {
+          window.alert('请先在 .env 中配置 API 密钥；使用通义时还需配置 LLM_API_BASE，详见 .env.example。');
+          return;
+        }
+        backdrop.hidden = false;
+        dialog.hidden = false;
+        document.documentElement.classList.add('llm-open');
+        queryEl.focus();
+      }
+      function closeLlm() {
+        backdrop.hidden = true;
+        dialog.hidden = true;
+        document.documentElement.classList.remove('llm-open');
+      }
+      window.__closeLlmDialog = closeLlm;
+      openBtn.addEventListener('click', openLlm);
+      closeBtn.addEventListener('click', closeLlm);
+      backdrop.addEventListener('click', closeLlm);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !dialog.hidden) closeLlm();
+      });
+
+      function renderLlmProducts(list) {
+        if (!list || !list.length) {
+          resultsEl.innerHTML = '<p class="llm-empty">没有匹配到商品，可换种说法试试。</p>';
+          return;
+        }
+        var loginHref = loginUrlBase + '?next=' + encodeURIComponent(loginNextUrl || '/');
+        var guestOverlay =
+          '<p class="llm-overlay-login-hint"><a href="' + loginHref + '">登录</a> 后可在此记录浏览、购买、收藏或屏蔽类目。</p>';
+        resultsEl.innerHTML = list.map(function (p) {
+          var rel = String(p.image || '').replace(/^\/+/, '');
+          var img = staticBase + rel;
+          var pid = Number(p.product_id);
+          var title = escapeHtml(p.title);
+          var desc = escapeHtml(p.description);
+          var cat = escapeHtml(p.category);
+          var price = Number(p.price).toFixed(2);
+          var overlayInner;
+          if (recUserId == null) {
+            overlayInner = guestOverlay;
+          } else {
+            overlayInner =
+              '<div class="rec-card__overlay-actions">' +
+                '<form method="post" action="' + interactUrl + '" class="rec-overlay-form js-no-full-reload">' +
+                  '<input type="hidden" name="user_id" value="' + recUserId + '">' +
+                  '<input type="hidden" name="product_id" value="' + pid + '">' +
+                  '<button type="submit" name="action" value="click" class="rec-overlay-btn rec-overlay-btn--view">浏览</button>' +
+                '</form>' +
+                '<form method="post" action="' + interactUrl + '" class="rec-overlay-form js-no-full-reload">' +
+                  '<input type="hidden" name="user_id" value="' + recUserId + '">' +
+                  '<input type="hidden" name="product_id" value="' + pid + '">' +
+                  '<button type="submit" name="action" value="purchase" class="rec-overlay-btn rec-overlay-btn--buy">购买</button>' +
+                '</form>' +
+                '<form method="post" action="' + favUrl + '" class="rec-overlay-form js-no-full-reload">' +
+                  '<input type="hidden" name="user_id" value="' + recUserId + '">' +
+                  '<input type="hidden" name="product_id" value="' + pid + '">' +
+                  '<input type="hidden" name="back" value="index">' +
+                  '<button type="submit" class="rec-overlay-btn rec-overlay-btn--fav">收藏</button>' +
+                '</form>' +
+                '<form method="post" action="' + dislikeUrl + '" class="rec-overlay-form js-no-full-reload">' +
+                  '<input type="hidden" name="user_id" value="' + recUserId + '">' +
+                  '<input type="hidden" name="category" value="' + escapeHtmlAttr(p.category) + '">' +
+                  '<input type="hidden" name="back" value="index">' +
+                  '<button type="submit" class="rec-overlay-btn rec-overlay-btn--dislike">我不喜欢</button>' +
+                '</form>' +
+              '</div>';
+          }
+
+          return (
+            '<article class="rec-card rec-card--hoverable llm-rec-card">' +
+              '<div class="rec-card__main">' +
+                '<div class="rec-card__media">' +
+                  '<img src="' + img + '" alt="" loading="lazy" width="120" height="80">' +
+                '</div>' +
+                '<div class="rec-card__text">' +
+                  '<span class="llm-rec-card__cat">' + cat + '</span>' +
+                  '<h3 class="rec-card__title">' + title + '</h3>' +
+                  '<p class="rec-card__price">￥' + price + '</p>' +
+                  '<p class="rec-card__desc">' + desc + '</p>' +
+                '</div>' +
+              '</div>' +
+              '<div class="rec-card__overlay" aria-hidden="true">' +
+                overlayInner +
+              '</div>' +
+            '</article>'
+          );
+        }).join('');
+      }
+      function escapeHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+      function escapeHtmlAttr(s) {
+        return escapeHtml(s).replace(/'/g, '&#39;');
+      }
+
+      submitBtn.addEventListener('click', function () {
+        var q = (queryEl.value || '').trim();
+        if (!q) {
+          window.alert('请先输入描述。');
+          return;
+        }
+        submitBtn.disabled = true;
+        metaEl.hidden = true;
+        resultsEl.innerHTML = '<p class="llm-loading">正在请求大模型…</p>';
+        fetch(llmApi, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q }),
+          credentials: 'same-origin',
+        })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+          .then(function (res) {
+            submitBtn.disabled = false;
+            if (!res.ok || !res.j.ok) {
+              resultsEl.innerHTML = '';
+              metaEl.hidden = false;
+              metaEl.textContent = res.j.error || ('请求失败 (' + res.status + ')');
+              return;
+            }
+            var j = res.j;
+            var parts = [];
+            if (j.filters && j.filters.explain) parts.push('模型理解：' + j.filters.explain);
+            if (j.used_semantic_fallback) parts.push('已使用语义相似度补充排序。');
+            if (j.llm_error) parts.push('LLM 提示：' + j.llm_error);
+            if (parts.length) {
+              metaEl.textContent = parts.join(' ');
+              metaEl.hidden = false;
+            } else {
+              metaEl.hidden = true;
+            }
+            renderLlmProducts(j.products);
+          })
+          .catch(function () {
+            submitBtn.disabled = false;
+            resultsEl.innerHTML = '';
+            metaEl.hidden = false;
+            metaEl.textContent = '网络错误，请稍后重试。';
+          });
+      });
+    })();
+    </script>
+    <script>
+    (function () {
+      var staticBase = {{ (url_for('static', filename='a')[:-1]) | tojson }};
+      var interactUrl = {{ url_for('interact') | tojson }};
+      var loginUrl = {{ url_for('login', next=request.full_path) | tojson }};
+
+      function refreshHomeWidgets() {
+        var qs = new URLSearchParams(window.location.search);
+        return fetch('/api/home-widgets?' + qs.toString(), { credentials: 'same-origin' })
+          .then(function (r) {
+            if (!r.ok) throw new Error('widgets');
+            return r.json();
+          })
+          .then(function (w) {
+            var rg = document.getElementById('recommend-grid-root');
+            var al = document.getElementById('activity-list-root');
+            if (rg && w.recommended_html != null) rg.innerHTML = w.recommended_html;
+            if (al && w.activity_html != null) al.innerHTML = w.activity_html;
+          });
+      }
+      window.refreshHomeWidgets = refreshHomeWidgets;
+
+      var pdBackdrop = document.getElementById('product-detail-backdrop');
+      var pdDialog = document.getElementById('product-detail-dialog');
+      var pdClose = document.getElementById('product-detail-close');
+      var pdImg = document.getElementById('product-detail-img');
+      var pdCat = document.getElementById('product-detail-cat');
+      var pdTitle = document.getElementById('product-detail-title');
+      var pdPrice = document.getElementById('product-detail-price');
+      var pdDesc = document.getElementById('product-detail-desc');
+
+      function openProductDetailModal(p) {
+        var rel = String(p.image || '').replace(/^\/+/, '');
+        pdImg.src = staticBase + rel;
+        pdImg.alt = p.title || '';
+        pdCat.textContent = p.category || '';
+        pdTitle.textContent = p.title || '';
+        pdPrice.textContent = '￥' + Number(p.price).toFixed(2);
+        pdDesc.textContent = p.description || '';
+        pdBackdrop.hidden = false;
+        pdDialog.hidden = false;
+        document.documentElement.classList.add('product-detail-open');
+      }
+      function closeProductDetailModal() {
+        pdBackdrop.hidden = true;
+        pdDialog.hidden = true;
+        document.documentElement.classList.remove('product-detail-open');
+        pdImg.src = '';
+      }
+      if (pdClose) pdClose.addEventListener('click', closeProductDetailModal);
+      if (pdBackdrop) pdBackdrop.addEventListener('click', closeProductDetailModal);
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && pdDialog && !pdDialog.hidden) closeProductDetailModal();
+      });
+
+      document.body.addEventListener('click', function (e) {
+        var btn = e.target.closest('.js-open-product-detail');
+        if (!btn) return;
+        var card = btn.closest('.product-card');
+        if (!card || !card.getAttribute('data-product')) return;
+        var p;
+        try {
+          p = JSON.parse(card.getAttribute('data-product'));
+        } catch (err) {
+          return;
+        }
+        if (btn.classList.contains('js-guest-product-detail')) {
+          openProductDetailModal(p);
+          return;
+        }
+        var form = btn.closest('form');
+        if (!form) return;
+        var fd = new FormData(form);
+        fd.set('ajax', '1');
+        fetch(interactUrl, { method: 'POST', body: fd, credentials: 'same-origin' })
+          .then(function (r) {
+            if (r.status === 401) {
+              window.location.href = loginUrl;
+              return Promise.reject('login');
+            }
+            if (!r.ok) throw new Error('post');
+            return r.json();
+          })
+          .then(function (j) {
+            if (!j || !j.ok) throw new Error('bad');
+            return refreshHomeWidgets();
+          })
+          .then(function () {
+            openProductDetailModal(p);
+          })
+          .catch(function (err) {
+            if (err === 'login') return;
+            openProductDetailModal(p);
+          });
+      });
+
+      document.body.addEventListener('submit', function (e) {
+        var form = e.target;
+        if (!form || form.tagName !== 'FORM' || !form.classList.contains('js-no-full-reload')) return;
+        e.preventDefault();
+        var fd = new FormData(form);
+        // 程序化 FormData 不会带上被点击的 submit，必须补上（否则 /interact 缺少 action 会 500）
+        var sub = e.submitter;
+        if (sub && sub.name) fd.set(sub.name, sub.value);
+        fd.set('ajax', '1');
+        fetch(form.getAttribute('action'), { method: 'POST', body: fd, credentials: 'same-origin' })
+          .then(function (r) {
+            if (r.status === 401) {
+              window.location.href = loginUrl;
+              return Promise.reject('login');
+            }
+            if (!r.ok) throw new Error('post');
+            return r.json();
+          })
+          .then(function (j) {
+            if (!j || !j.ok) throw new Error('bad');
+            return refreshHomeWidgets();
+          })
+          .then(function () {
+            if (window.__closeLlmDialog && form.closest && form.closest('#llm-dialog')) {
+              window.__closeLlmDialog();
+            }
+          })
+          .catch(function (err) {
+            if (err === 'login') return;
+            window.location.reload();
+          });
+      });
+    })();
+    </script>
+    {% include '_live_reload.html' %}
+</body>
+</html>

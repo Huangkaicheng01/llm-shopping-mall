@@ -1,0 +1,19 @@
+{% if config.DEBUG %}
+<script>
+(function () {
+  var prev = null;
+  var url = {{ url_for('dev_live_reload') | tojson }};
+  function poll() {
+    fetch(url, { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) return Promise.reject(); return r.json(); })
+      .then(function (data) {
+        var sig = JSON.stringify(data);
+        if (prev === null) { prev = sig; return; }
+        if (sig !== prev) location.reload();
+      })
+      .catch(function () {});
+  }
+  setInterval(poll, 2000);
+})();
+</script>
+{% endif %}

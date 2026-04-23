@@ -1,0 +1,10 @@
+{% if user_activity.empty %}
+<li class="activity-empty">暂无记录，浏览或购买商品后将显示在这里。</li>
+{% else %}
+{% for action in user_activity.itertuples() %}
+<li>
+    <span class="activity-badge activity-badge--{{ action.action }}">{{ action.action }}</span>
+    <span>商品 ID {{ action.product_id }} · {{ action.title }}</span>
+</li>
+{% endfor %}
+{% endif %}

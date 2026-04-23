@@ -1,0 +1,7 @@
+{% if recommended.empty %}
+<p class="rec-empty">{% if rec_user_id %}请先在左侧浏览或购买商品以积累兴趣标签，系统将按标签权重在对应类目下为您推荐。{% else %}请先<a href="{{ url_for('login', next=request.path) }}">登录</a>，登录后浏览或购买商品即可在此看到个性化推荐。{% endif %}</p>
+{% else %}
+{% for product in recommended.itertuples() %}
+{% include '_rec_sidebar_card.html' %}
+{% endfor %}
+{% endif %}
