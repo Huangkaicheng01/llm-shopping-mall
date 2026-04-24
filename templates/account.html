@@ -42,15 +42,31 @@
         </section>
         <section class="panel account-panel">
             <h2>兴趣标签</h2>
-            <p class="account-tags__hint">在您<strong>浏览或购买</strong>商品时，系统会按商品类目自动累计标签权重。</p>
+            <p class="account-tags__hint">您可在此<strong>勾选感兴趣的商品类目</strong>；首页浏览、购买时仍会在对应类目上继续<strong>累加权重</strong>。</p>
+            <form class="account-interest-form" id="account-interest-form">
+                <fieldset class="account-interest-form__fieldset">
+                    <legend class="account-interest-form__legend">选择类目（至少一项）</legend>
+                    <div class="interest-onboarding-chips account-interest-form__chips">
+                        {% for c in product_categories %}
+                        <label class="interest-onboarding-chip">
+                            <input type="checkbox" class="interest-onboarding-chip__input" name="interest_cat" value="{{ c }}" {% if c in selected_interest_tags %}checked{% endif %}>
+                            <span class="interest-onboarding-chip__text">{{ c }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+                <p class="account-interest-form__msg" id="account-interest-msg" hidden></p>
+                <div class="account-interest-form__actions">
+                    <button type="submit" class="btn btn-primary" id="account-interest-save">保存兴趣类目</button>
+                </div>
+            </form>
             {% if tags %}
+            <h3 class="account-tags__sub">当前权重（含浏览/购买累计）</h3>
             <ul class="account-tags">
                 {% for t in tags %}
                 <li class="account-tags__item"><span class="account-tags__name">{{ t.tag }}</span><span class="account-tags__weight">权重 {{ t.weight }}</span></li>
                 {% endfor %}
             </ul>
-            {% else %}
-            <p class="empty-state account-tags__empty">暂无标签，去首页逛逛并点击「浏览」或「购买」即可积累。</p>
             {% endif %}
             <p class="account-panel__back"><a href="{{ url_for('index') }}">返回首页</a></p>
         </section>
@@ -58,5 +74,56 @@
     <footer class="site-footer">
         <p>Shopping Platform · 演示商城</p>
     </footer>
+    <script>
+    (function () {
+      var saveUrl = {{ url_for('api_interest_tags_save') | tojson }};
+      var form = document.getElementById('account-interest-form');
+      var msg = document.getElementById('account-interest-msg');
+      if (!form) return;
+      function setMsg(text, isErr) {
+        if (!msg) return;
+        if (!text) {
+          msg.hidden = true;
+          msg.textContent = '';
+          msg.classList.remove('is-error');
+          return;
+        }
+        msg.hidden = false;
+        msg.textContent = text;
+        msg.classList.toggle('is-error', !!isErr);
+      }
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var tags = [];
+        form.querySelectorAll('input[name="interest_cat"]:checked').forEach(function (el) {
+          tags.push(el.value);
+        });
+        if (!tags.length) {
+          setMsg('请至少选择一个类目。', true);
+          return;
+        }
+        setMsg('正在保存…', false);
+        fetch(saveUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ tags: tags }),
+        })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+          .then(function (res) {
+            if (res.status === 401) {
+              window.location.href = {{ url_for('login', next=request.full_path) | tojson }};
+              return;
+            }
+            if (!res.ok || !res.j.ok) throw new Error((res.j && res.j.error) || '保存失败');
+            setMsg('已保存，正在刷新页面…', false);
+            window.location.reload();
+          })
+          .catch(function (err) {
+            setMsg((err && err.message) || '保存失败，请稍后重试。', true);
+          });
+      });
+    })();
+    </script>
 </body>
 </html>

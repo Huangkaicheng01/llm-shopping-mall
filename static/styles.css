@@ -530,11 +530,19 @@ html.llm-open {
 }
 
 /* 商品详情弹窗（首页「浏览」） */
+/* 说明：本文件里若对弹窗写 display:grid，会压过浏览器对 [hidden] 的默认 display:none
+   （:where([hidden]) 特异度为 0），导致页面一加载弹窗就可见、且 JS 设 hidden 也关不掉。 */
+.product-detail-backdrop[hidden],
+.product-detail-dialog[hidden] {
+    display: none !important;
+}
+
 .product-detail-backdrop {
     position: fixed;
     inset: 0;
     z-index: 198;
-    background: rgba(15, 20, 30, 0.48);
+    background: rgba(9, 12, 20, 0.56);
+    backdrop-filter: blur(4px);
 }
 
 .product-detail-dialog {
@@ -543,31 +551,36 @@ html.llm-open {
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: min(92vw, 26rem);
-    max-height: min(88vh, 32rem);
-    overflow: auto;
+    width: min(94vw, 62rem);
+    max-height: min(90vh, 44rem);
+    overflow: hidden;
     background: var(--surface);
-    border-radius: var(--radius);
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+    border-radius: 18px;
+    box-shadow: 0 28px 68px rgba(0, 0, 0, 0.28);
     border: 1px solid var(--border);
     padding: 0;
 }
 
+.product-detail-dialog:not([hidden]) {
+    display: grid;
+    grid-template-columns: minmax(18rem, 40%) 1fr;
+}
+
 .product-detail-dialog__close {
     position: absolute;
-    top: 0.5rem;
-    right: 0.55rem;
+    top: 0.85rem;
+    right: 0.9rem;
     z-index: 2;
     border: none;
-    background: rgba(255, 255, 255, 0.92);
-    width: 2rem;
-    height: 2rem;
+    background: rgba(255, 255, 255, 0.95);
+    width: 2.15rem;
+    height: 2.15rem;
     border-radius: 999px;
-    font-size: 1.35rem;
+    font-size: 1.45rem;
     line-height: 1;
     color: var(--text-muted);
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
 }
 
 .product-detail-dialog__close:hover {
@@ -576,56 +589,331 @@ html.llm-open {
 
 .product-detail-dialog__media {
     width: 100%;
-    aspect-ratio: 16 / 10;
-    max-height: 14rem;
-    background: var(--bg);
+    height: 100%;
+    min-height: 22rem;
+    background: linear-gradient(160deg, #e9eef7 0%, #f6f8fc 100%);
     overflow: hidden;
+    border-right: 1px solid var(--border);
 }
 
 .product-detail-dialog__media img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     display: block;
+    padding: 1.2rem;
 }
 
 .product-detail-dialog__body {
-    padding: 1rem 1.15rem 1.25rem;
+    padding: 1.4rem 1.4rem 1.5rem;
+    overflow: auto;
 }
 
 .product-detail-dialog__cat {
-    margin: 0 0 0.35rem;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--accent);
+    margin: 0 0 0.45rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: #0a58ca;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 .product-detail-dialog__title {
-    margin: 0 0 0.5rem;
-    font-size: 1.15rem;
+    margin: 0 0 0.6rem;
+    font-size: 1.4rem;
     font-weight: 700;
-    line-height: 1.35;
+    line-height: 1.3;
     letter-spacing: -0.02em;
 }
 
 .product-detail-dialog__price {
-    margin: 0 0 0.75rem;
-    font-size: 1.1rem;
+    margin: 0 0 0.95rem;
+    font-size: 1.35rem;
     font-weight: 700;
-    color: #c0392b;
+    color: #b42318;
 }
 
 .product-detail-dialog__desc {
     margin: 0;
-    font-size: 0.9rem;
-    line-height: 1.65;
+    font-size: 0.94rem;
+    line-height: 1.7;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #fafbfd;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.75rem 0.85rem;
+}
+
+.product-detail-reviews {
+    margin-top: 1.05rem;
+    padding-top: 0.95rem;
+    border-top: 1px solid var(--border);
+}
+
+.product-detail-reviews__title {
+    margin: 0 0 0.6rem;
+    font-size: 1.03rem;
+}
+
+.product-detail-reviews__meta {
+    margin: 0 0 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.product-detail-reviews__meta.is-error {
+    color: #d64040;
+}
+
+.product-detail-reviews__list {
+    max-height: 15rem;
+    overflow: auto;
+    display: grid;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+    padding-right: 0.15rem;
+}
+
+.product-detail-reviews__item {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fafbfd;
+    padding: 0.62rem 0.72rem;
+}
+
+.product-detail-reviews__item--mine {
+    border-color: #b6d4fe;
+    background: #eef5ff;
+}
+
+.product-detail-reviews__head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    align-items: baseline;
+    margin-bottom: 0.25rem;
+}
+
+.product-detail-reviews__author {
+    font-size: 0.86rem;
+}
+
+.product-detail-reviews__time {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+}
+
+.product-detail-reviews__body,
+.product-detail-reviews__empty {
+    margin: 0;
+    font-size: 0.88rem;
     color: var(--text-muted);
     white-space: pre-wrap;
     word-break: break-word;
 }
 
+.product-detail-review-form textarea {
+    width: 100%;
+    resize: vertical;
+    min-height: 5rem;
+    padding: 0.62rem 0.7rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    font: inherit;
+    line-height: 1.5;
+}
+
+.product-detail-review-form__actions {
+    margin-top: 0.4rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.product-detail-reviews__login-hint {
+    margin: 0;
+    font-size: 0.84rem;
+    color: var(--text-muted);
+}
+
+@media (max-width: 920px) {
+    .product-detail-dialog:not([hidden]) {
+        width: min(94vw, 42rem);
+        max-height: min(92vh, 44rem);
+        grid-template-columns: 1fr;
+        overflow: auto;
+    }
+
+    .product-detail-dialog__media {
+        min-height: 14rem;
+        max-height: 20rem;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .product-detail-dialog__body {
+        overflow: visible;
+        padding: 1rem 1.05rem 1.15rem;
+    }
+
+    .product-detail-dialog__title {
+        font-size: 1.22rem;
+    }
+
+    .product-detail-dialog__price {
+        font-size: 1.2rem;
+    }
+
+    .product-detail-reviews__list {
+        max-height: 11.5rem;
+    }
+}
+
 html.product-detail-open {
     overflow: hidden;
+}
+
+/* 登录后首次兴趣类目引导 */
+.interest-onboarding-backdrop[hidden],
+.interest-onboarding-dialog[hidden] {
+    display: none !important;
+}
+
+.interest-onboarding-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 207;
+    background: rgba(9, 12, 20, 0.52);
+    backdrop-filter: blur(3px);
+}
+
+.interest-onboarding-dialog {
+    position: fixed;
+    z-index: 208;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(94vw, 28rem);
+    max-height: min(88vh, 38rem);
+    overflow: auto;
+    background: var(--surface);
+    border-radius: 16px;
+    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.22);
+    border: 1px solid var(--border);
+    padding: 0;
+}
+
+.interest-onboarding-dialog:not([hidden]) {
+    display: block;
+}
+
+.interest-onboarding-dialog__inner {
+    padding: 1.35rem 1.4rem 1.45rem;
+}
+
+.interest-onboarding-dialog__title {
+    margin: 0 0 0.5rem;
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.interest-onboarding-dialog__hint {
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    line-height: 1.55;
+}
+
+.interest-onboarding-fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+}
+
+.interest-onboarding-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.interest-onboarding-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #fafbfd;
+    font-size: 0.86rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.interest-onboarding-chip:has(.interest-onboarding-chip__input:checked) {
+    border-color: #86b7fe;
+    background: #eef5ff;
+    color: #0a58ca;
+    font-weight: 600;
+}
+
+.interest-onboarding-chip__input {
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.interest-onboarding-dialog__err {
+    margin: 0.65rem 0 0;
+    font-size: 0.86rem;
+    color: #b42318;
+}
+
+.interest-onboarding-dialog__actions {
+    margin-top: 1rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
+html.interest-onboarding-open {
+    overflow: hidden;
+}
+
+.account-interest-form {
+    margin-bottom: 0.75rem;
+}
+
+.account-interest-form__fieldset {
+    border: 0;
+    margin: 0;
+    padding: 0;
+}
+
+.account-interest-form__legend {
+    font-size: 0.92rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    padding: 0;
+}
+
+.account-interest-form__msg {
+    margin: 0.5rem 0 0;
+    font-size: 0.88rem;
+    color: var(--text-muted);
+}
+
+.account-interest-form__msg.is-error {
+    color: #b42318;
+}
+
+.account-interest-form__actions {
+    margin-top: 0.75rem;
+}
+
+.account-tags__sub {
+    margin: 1.1rem 0 0.45rem;
+    font-size: 0.95rem;
 }
 
 .llm-rec-card {

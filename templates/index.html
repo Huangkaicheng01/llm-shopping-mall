@@ -6,7 +6,7 @@
     <title>精选商城 · Shopping Platform</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body data-llm-enabled="{{ '1' if llm_enabled else '0' }}">
+<body data-llm-enabled="{{ '1' if llm_enabled else '0' }}"{% if current_user %} data-current-user-id="{{ current_user.user_id }}"{% endif %}>
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     <div class="flash-stack" role="status">
@@ -82,6 +82,24 @@
             <h2 id="product-detail-title" class="product-detail-dialog__title"></h2>
             <p class="product-detail-dialog__price" id="product-detail-price"></p>
             <div class="product-detail-dialog__desc" id="product-detail-desc"></div>
+            <section class="product-detail-reviews" aria-labelledby="product-detail-reviews-title">
+                <h3 id="product-detail-reviews-title" class="product-detail-reviews__title">商品评论</h3>
+                <p class="product-detail-reviews__meta" id="product-detail-reviews-meta" hidden></p>
+                <div class="product-detail-reviews__list" id="product-detail-reviews-list"></div>
+                {% if current_user %}
+                <form class="product-detail-review-form" id="product-detail-review-form">
+                    <label class="visually-hidden" for="product-detail-review-input">发表评论</label>
+                    <textarea id="product-detail-review-input" maxlength="2000" rows="3" placeholder="说说你的使用体验…" required></textarea>
+                    <div class="product-detail-review-form__actions">
+                        <button type="submit" id="product-detail-review-submit" class="btn btn-primary">发布评论</button>
+                    </div>
+                </form>
+                {% else %}
+                <p class="product-detail-reviews__login-hint">
+                    <a href="{{ url_for('login', next=request.full_path) }}">登录</a> 后可发表评论。
+                </p>
+                {% endif %}
+            </section>
         </div>
     </div>
 
@@ -97,7 +115,7 @@
     <main class="main-content">
         <section class="hero">
             <!-- <h1>欢迎来到精选商城</h1> -->
-            <p class="hero-sub">浏览商品、搜索心仪好物；{% if current_user %}您的浏览与购买会累计兴趣标签，右侧「为您推荐」按标签权重在对应类目下挑选商品。{% else %}登录后可记录行为、累计兴趣标签并在右侧查看按标签推荐的商品。{% endif %}</p>
+            <p class="hero-sub">浏览商品、搜索心仪好物；{% if current_user %}登录后请先完成<strong>兴趣类目</strong>选择（未完成时会弹出）；您的浏览与购买会继续累计标签权重，右侧「为您推荐」在对应类目下挑选商品。{% else %}登录后可选择兴趣类目、记录行为并累计标签权重，在右侧查看按标签推荐的商品。{% endif %}</p>
         </section>
 
         <div class="catalog-with-rec">
@@ -379,6 +397,7 @@
       var staticBase = {{ (url_for('static', filename='a')[:-1]) | tojson }};
       var interactUrl = {{ url_for('interact') | tojson }};
       var loginUrl = {{ url_for('login', next=request.full_path) | tojson }};
+      var currentUserId = {{ (current_user.user_id if current_user else none) | tojson }};
 
       function refreshHomeWidgets() {
         var qs = new URLSearchParams(window.location.search);
@@ -404,6 +423,70 @@
       var pdTitle = document.getElementById('product-detail-title');
       var pdPrice = document.getElementById('product-detail-price');
       var pdDesc = document.getElementById('product-detail-desc');
+      var pdReviewsMeta = document.getElementById('product-detail-reviews-meta');
+      var pdReviewsList = document.getElementById('product-detail-reviews-list');
+      var pdReviewForm = document.getElementById('product-detail-review-form');
+      var pdReviewInput = document.getElementById('product-detail-review-input');
+      var pdReviewSubmit = document.getElementById('product-detail-review-submit');
+      var activeProductIdForReview = null;
+
+      function escapeHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+
+      function renderProductReviews(items) {
+        if (!pdReviewsList) return;
+        var list = Array.isArray(items) ? items : [];
+        if (!list.length) {
+          pdReviewsList.innerHTML = '<p class="product-detail-reviews__empty">暂无评论，来抢沙发吧。</p>';
+          return;
+        }
+        pdReviewsList.innerHTML = list.map(function (r) {
+          var mine = r && r.is_mine ? ' product-detail-reviews__item--mine' : '';
+          var name = escapeHtml((r && r.reviewer_name) || '用户');
+          var body = escapeHtml((r && r.body) || '');
+          var dt = escapeHtml((r && r.created_at) || '');
+          return (
+            '<article class="product-detail-reviews__item' + mine + '">' +
+              '<div class="product-detail-reviews__head">' +
+                '<strong class="product-detail-reviews__author">' + name + '</strong>' +
+                '<time class="product-detail-reviews__time">' + dt + '</time>' +
+              '</div>' +
+              '<p class="product-detail-reviews__body">' + body + '</p>' +
+            '</article>'
+          );
+        }).join('');
+      }
+
+      function setReviewsMeta(text, isError) {
+        if (!pdReviewsMeta) return;
+        if (!text) {
+          pdReviewsMeta.hidden = true;
+          pdReviewsMeta.textContent = '';
+          pdReviewsMeta.classList.remove('is-error');
+          return;
+        }
+        pdReviewsMeta.hidden = false;
+        pdReviewsMeta.textContent = text;
+        pdReviewsMeta.classList.toggle('is-error', !!isError);
+      }
+
+      function fetchAndRenderProductReviews(productId) {
+        if (!productId) return Promise.resolve();
+        setReviewsMeta('评论加载中…', false);
+        if (pdReviewsList) pdReviewsList.innerHTML = '';
+        return fetch('/api/products/' + encodeURIComponent(String(productId)) + '/reviews', { credentials: 'same-origin' })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok || !res.j.ok) throw new Error((res.j && res.j.error) || ('加载失败(' + res.status + ')'));
+            renderProductReviews(res.j.reviews || []);
+            setReviewsMeta('', false);
+          })
+          .catch(function (err) {
+            renderProductReviews([]);
+            setReviewsMeta((err && err.message) || '评论加载失败，请稍后重试。', true);
+          });
+      }
 
       function openProductDetailModal(p) {
         var rel = String(p.image || '').replace(/^\/+/, '');
@@ -413,6 +496,9 @@
         pdTitle.textContent = p.title || '';
         pdPrice.textContent = '￥' + Number(p.price).toFixed(2);
         pdDesc.textContent = p.description || '';
+        activeProductIdForReview = Number(p.product_id) || null;
+        fetchAndRenderProductReviews(activeProductIdForReview);
+        if (pdReviewInput) pdReviewInput.value = '';
         pdBackdrop.hidden = false;
         pdDialog.hidden = false;
         document.documentElement.classList.add('product-detail-open');
@@ -422,6 +508,8 @@
         pdDialog.hidden = true;
         document.documentElement.classList.remove('product-detail-open');
         pdImg.src = '';
+        setReviewsMeta('', false);
+        activeProductIdForReview = null;
       }
       if (pdClose) pdClose.addEventListener('click', closeProductDetailModal);
       if (pdBackdrop) pdBackdrop.addEventListener('click', closeProductDetailModal);
@@ -502,8 +590,52 @@
             window.location.reload();
           });
       });
+
+      if (pdReviewForm) {
+        pdReviewForm.addEventListener('submit', function (e) {
+          e.preventDefault();
+          if (!activeProductIdForReview) return;
+          var text = (pdReviewInput && pdReviewInput.value ? pdReviewInput.value : '').trim();
+          if (!text) {
+            setReviewsMeta('评论内容不能为空。', true);
+            return;
+          }
+          if (!currentUserId) {
+            window.location.href = loginUrl;
+            return;
+          }
+          if (pdReviewSubmit) pdReviewSubmit.disabled = true;
+          setReviewsMeta('正在发布评论…', false);
+          fetch('/api/products/' + encodeURIComponent(String(activeProductIdForReview)) + '/reviews', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ body: text }),
+          })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+            .then(function (res) {
+              if (res.status === 401 || (res.j && res.j.login_required)) {
+                window.location.href = loginUrl;
+                return Promise.reject('login');
+              }
+              if (!res.ok || !res.j.ok) throw new Error((res.j && res.j.error) || ('发布失败(' + res.status + ')'));
+              if (pdReviewInput) pdReviewInput.value = '';
+              return fetchAndRenderProductReviews(activeProductIdForReview).then(function () {
+                setReviewsMeta('评论发布成功。', false);
+              });
+            })
+            .catch(function (err) {
+              if (err === 'login') return;
+              setReviewsMeta((err && err.message) || '评论发布失败，请稍后重试。', true);
+            })
+            .finally(function () {
+              if (pdReviewSubmit) pdReviewSubmit.disabled = false;
+            });
+        });
+      }
     })();
     </script>
+    {% include '_interest_onboarding.html' %}
     {% include '_live_reload.html' %}
 </body>
 </html>

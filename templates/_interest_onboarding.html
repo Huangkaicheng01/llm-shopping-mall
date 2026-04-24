@@ -1,0 +1,125 @@
+{# 登录用户未完成兴趣类目引导时展示；个人中心可再次修改（见 account.html） #}
+<div class="interest-onboarding-backdrop" id="interest-onboarding-backdrop" hidden></div>
+<div class="interest-onboarding-dialog" id="interest-onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="interest-onboarding-title" hidden>
+    <div class="interest-onboarding-dialog__inner">
+        <h2 id="interest-onboarding-title" class="interest-onboarding-dialog__title">选择感兴趣的商品类目</h2>
+        <p class="interest-onboarding-dialog__hint">请至少勾选一个类目，用于「为您推荐」；之后您仍可在<strong>用户中心</strong>随时修改。</p>
+        <fieldset class="interest-onboarding-fieldset">
+            <legend class="visually-hidden">商品类目</legend>
+            <div class="interest-onboarding-chips" id="interest-onboarding-chips"></div>
+        </fieldset>
+        <p class="interest-onboarding-dialog__err" id="interest-onboarding-err" hidden></p>
+        <div class="interest-onboarding-dialog__actions">
+            <button type="button" class="btn btn-primary" id="interest-onboarding-submit">保存并开始</button>
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+  var uid = document.body.getAttribute('data-current-user-id');
+  if (!uid) return;
+
+  var statusUrl = {{ url_for('api_interest_tags_status') | tojson }};
+  var saveUrl = {{ url_for('api_interest_tags_save') | tojson }};
+
+  var backdrop = document.getElementById('interest-onboarding-backdrop');
+  var dialog = document.getElementById('interest-onboarding-dialog');
+  var chipsRoot = document.getElementById('interest-onboarding-chips');
+  var errEl = document.getElementById('interest-onboarding-err');
+  var submitBtn = document.getElementById('interest-onboarding-submit');
+  if (!backdrop || !dialog || !chipsRoot || !submitBtn) return;
+
+  function setErr(msg) {
+    if (!errEl) return;
+    if (!msg) {
+      errEl.hidden = true;
+      errEl.textContent = '';
+      return;
+    }
+    errEl.hidden = false;
+    errEl.textContent = msg;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/'/g, '&#39;');
+  }
+
+  function openInterestModal(categories, preselected) {
+    var sel = {};
+    (preselected || []).forEach(function (t) { sel[String(t)] = true; });
+    chipsRoot.innerHTML = (categories || []).map(function (c, i) {
+      var checked = sel[c] ? ' checked' : '';
+      return (
+        '<label class="interest-onboarding-chip" for="interest-cat-' + i + '">' +
+          '<input id="interest-cat-' + i + '" type="checkbox" class="interest-onboarding-chip__input" value="' + escapeAttr(c) + '"' + checked + '> ' +
+          '<span class="interest-onboarding-chip__text">' + escapeHtml(c) + '</span>' +
+        '</label>'
+      );
+    }).join('');
+    backdrop.hidden = false;
+    dialog.hidden = false;
+    document.documentElement.classList.add('interest-onboarding-open');
+  }
+
+  function closeInterestModal() {
+    backdrop.hidden = true;
+    dialog.hidden = true;
+    document.documentElement.classList.remove('interest-onboarding-open');
+  }
+
+  submitBtn.addEventListener('click', function () {
+    var boxes = chipsRoot.querySelectorAll('input[type="checkbox"]');
+    var tags = [];
+    boxes.forEach(function (b) {
+      if (b.checked) tags.push(b.value);
+    });
+    if (!tags.length) {
+      setErr('请至少选择一个类目。');
+      return;
+    }
+    setErr('');
+    submitBtn.disabled = true;
+    fetch(saveUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ tags: tags }),
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+      .then(function (res) {
+        if (res.status === 401 || (res.j && res.j.login_required)) {
+          window.location.href = {{ url_for('login', next=request.full_path) | tojson }};
+          return Promise.reject('login');
+        }
+        if (!res.ok || !res.j.ok) throw new Error((res.j && res.j.error) || '保存失败');
+        closeInterestModal();
+        if (typeof window.refreshHomeWidgets === 'function') {
+          return window.refreshHomeWidgets();
+        }
+        if (window.location.pathname.indexOf('recommendations') !== -1) {
+          window.location.reload();
+        }
+      })
+      .catch(function (e) {
+        if (e === 'login') return;
+        setErr((e && e.message) || '保存失败，请稍后重试。');
+      })
+      .finally(function () {
+        submitBtn.disabled = false;
+      });
+  });
+
+  fetch(statusUrl, { credentials: 'same-origin' })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.j || !res.j.ok) return;
+      if (!res.j.required) return;
+      openInterestModal(res.j.categories || [], res.j.selected || []);
+    })
+    .catch(function () { /* 忽略网络错误，不阻塞购物 */ });
+})();
+</script>

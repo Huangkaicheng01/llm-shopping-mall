@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     name TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    interest_onboarding_done INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS user_tags (
@@ -30,10 +31,28 @@ CREATE INDEX IF NOT EXISTS idx_user_tags_user ON user_tags(user_id);
 """
 
 
+def _migrate_users_interest_onboarding(conn: sqlite3.Connection) -> None:
+    """旧库补列；已有 user_tags 的用户视为已完成引导，避免老用户再被拦截。"""
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(users)').fetchall()}
+    if 'interest_onboarding_done' not in cols:
+        conn.execute(
+            'ALTER TABLE users ADD COLUMN interest_onboarding_done INTEGER NOT NULL DEFAULT 0'
+        )
+    conn.execute(
+        """
+        UPDATE users SET interest_onboarding_done = 1
+        WHERE EXISTS (
+            SELECT 1 FROM user_tags ut WHERE ut.user_id = users.user_id
+        )
+        """
+    )
+
+
 def init_auth_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute('PRAGMA foreign_keys = ON')
         conn.executescript(AUTH_SCHEMA)
+        _migrate_users_interest_onboarding(conn)
         conn.commit()
 
 
@@ -43,23 +62,43 @@ def get_user_by_email(db_path: Path, email: str) -> dict[str, Any] | None:
         return None
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
-            'SELECT user_id, email, name, created_at FROM users WHERE lower(email) = ?',
+            """
+            SELECT user_id, email, name, created_at,
+                   COALESCE(interest_onboarding_done, 0) AS interest_onboarding_done
+            FROM users WHERE lower(email) = ?
+            """,
             (email,),
         ).fetchone()
     if not row:
         return None
-    return {'user_id': row[0], 'email': row[1], 'name': row[2], 'created_at': row[3]}
+    return {
+        'user_id': row[0],
+        'email': row[1],
+        'name': row[2],
+        'created_at': row[3],
+        'interest_onboarding_done': int(row[4] or 0),
+    }
 
 
 def get_user_by_id(db_path: Path, user_id: int) -> dict[str, Any] | None:
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
-            'SELECT user_id, email, name, created_at FROM users WHERE user_id = ?',
+            """
+            SELECT user_id, email, name, created_at,
+                   COALESCE(interest_onboarding_done, 0) AS interest_onboarding_done
+            FROM users WHERE user_id = ?
+            """,
             (int(user_id),),
         ).fetchone()
     if not row:
         return None
-    return {'user_id': row[0], 'email': row[1], 'name': row[2], 'created_at': row[3]}
+    return {
+        'user_id': row[0],
+        'email': row[1],
+        'name': row[2],
+        'created_at': row[3],
+        'interest_onboarding_done': int(row[4] or 0),
+    }
 
 
 def create_user(db_path: Path, email: str, password_hash: str, name: str) -> int:
@@ -89,6 +128,36 @@ def bump_user_tag_for_category(db_path: Path, user_id: int, category: str) -> No
             """,
             (int(user_id), tag),
         )
+        conn.commit()
+
+
+def set_interest_onboarding_done(db_path: Path, user_id: int, done: bool = True) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            'UPDATE users SET interest_onboarding_done = ? WHERE user_id = ?',
+            (1 if done else 0, int(user_id)),
+        )
+        conn.commit()
+
+
+def replace_user_interest_tags(db_path: Path, user_id: int, tags: list[str]) -> None:
+    """用手选的商品类目覆盖 user_tags（每条初始权重 5）。"""
+    uid = int(user_id)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in tags:
+        t = (raw or '').strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        ordered.append(t)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute('DELETE FROM user_tags WHERE user_id = ?', (uid,))
+        for tag in ordered:
+            conn.execute(
+                'INSERT INTO user_tags (user_id, tag, weight) VALUES (?, ?, 5)',
+                (uid, tag),
+            )
         conn.commit()
 
 

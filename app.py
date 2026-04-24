@@ -33,8 +33,18 @@ from auth_db import (
     get_user_by_id,
     init_auth_db,
     list_user_tags,
+    replace_user_interest_tags,
+    set_interest_onboarding_done,
 )
-from catalog_db import catalog_db_path, init_catalog, load_products_dataframe, should_reseed_from_env
+from catalog_db import (
+    catalog_db_path,
+    init_catalog,
+    insert_product_review,
+    list_product_reviews,
+    load_products_dataframe,
+    seed_demo_product_reviews_if_empty,
+    should_reseed_from_env,
+)
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
 import numpy as np  # 向量运算、堆叠与 reshape
@@ -52,6 +62,7 @@ app.secret_key = (os.environ.get('SECRET_KEY') or '').strip() or 'dev-only-set-S
 _CATALOG_DB = catalog_db_path(_ROOT)
 init_catalog(_ROOT, reseed=should_reseed_from_env())
 init_auth_db(_CATALOG_DB)
+seed_demo_product_reviews_if_empty(_CATALOG_DB)
 
 
 def get_current_user():
@@ -135,12 +146,24 @@ def reset_in_memory_user_state(user_id: int) -> None:
 
 
 # 中文商品描述请用中文 BERT；bert-base-uncased 面向英文，向量不可靠，易出现「笔记本→牛奶」等跨类误推
-model = pipeline('feature-extraction', model='bert-base-chinese')
+# 若运行环境缺少 PyTorch，则回退到轻量级哈希向量，保证应用可启动（语义质量会下降）。
+try:
+    model = pipeline('feature-extraction', model='bert-base-chinese')
+except Exception:
+    model = None
 
 
 def get_embeddings(text):
     """对单条文本做特征提取，返回该句对应的一维向量（取 [CLS] 或首 token 表示，与 pipeline 输出一致）。"""
-    return model(text)[0][0]
+    if model is not None:
+        return model(text)[0][0]
+    v = np.zeros(256, dtype=np.float64)
+    for tok in str(text or '').lower().split():
+        v[hash(tok) % v.shape[0]] += 1.0
+    n = np.linalg.norm(v)
+    if n > 0:
+        v = v / n
+    return v.tolist()
 
 
 # 为每个商品预计算描述向量，供推荐与相似度计算复用
@@ -442,6 +465,100 @@ def api_llm_recommend():
     )
 
 
+def _product_exists(product_id: int) -> bool:
+    return bool((products['product_id'] == int(product_id)).any())
+
+
+def _product_categories_sorted() -> list[str]:
+    return sorted(products['category'].astype(str).str.strip().unique().tolist())
+
+
+@app.route('/api/interest-tags/status', endpoint='api_interest_tags_status')
+@login_required
+def api_interest_tags_status():
+    uid = int(session['user_id'])
+    user = get_user_by_id(_CATALOG_DB, uid)
+    if not user:
+        session.pop('user_id', None)
+        return jsonify(ok=False, login_required=True), 401
+    done = bool(user.get('interest_onboarding_done'))
+    tag_rows = list_user_tags(_CATALOG_DB, uid)
+    selected = [str(t['tag']) for t in tag_rows]
+    return jsonify(
+        ok=True,
+        required=not done,
+        categories=_product_categories_sorted(),
+        selected=selected,
+    )
+
+
+@app.route('/api/interest-tags', methods=['POST'], endpoint='api_interest_tags_save')
+@login_required
+def api_interest_tags_save():
+    uid = int(session['user_id'])
+    user = get_user_by_id(_CATALOG_DB, uid)
+    if not user:
+        session.pop('user_id', None)
+        return jsonify(ok=False, login_required=True), 401
+    if not request.is_json:
+        return jsonify(ok=False, error='请使用 Content-Type: application/json'), 400
+    data = request.get_json(silent=True) or {}
+    raw = data.get('tags')
+    if not isinstance(raw, list):
+        return jsonify(ok=False, error='tags 须为字符串数组'), 400
+    allowed = set(_product_categories_sorted())
+    picked: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        t = item.strip()
+        if not t or t not in allowed or t in seen:
+            continue
+        seen.add(t)
+        picked.append(t)
+    if not picked:
+        return jsonify(ok=False, error='请至少选择一个商品类目'), 400
+    replace_user_interest_tags(_CATALOG_DB, uid, picked)
+    set_interest_onboarding_done(_CATALOG_DB, uid, True)
+    return jsonify(ok=True, tags=picked)
+
+
+@app.route('/api/products/<int:product_id>/reviews', methods=['GET', 'POST'])
+def api_product_reviews(product_id: int):
+    if not _product_exists(product_id):
+        return jsonify(ok=False, error='商品不存在'), 404
+    if request.method == 'GET':
+        uid = session.get('user_id')
+        uid = int(uid) if uid is not None else None
+        rows = list_product_reviews(_CATALOG_DB, product_id)
+        for r in rows:
+            r['is_mine'] = bool(uid is not None and r.get('user_id') == uid)
+        return jsonify(ok=True, reviews=rows)
+
+    if not session.get('user_id'):
+        return jsonify(ok=False, login_required=True), 401
+    if not request.is_json:
+        return jsonify(ok=False, error='请使用 Content-Type: application/json'), 400
+    data = request.get_json(silent=True) or {}
+    body = (data.get('body') or '').strip()
+    if not body:
+        return jsonify(ok=False, error='评论内容不能为空'), 400
+    if len(body) > 2000:
+        return jsonify(ok=False, error='评论过长（最多 2000 字）'), 400
+    uid = int(session['user_id'])
+    user = get_user_by_id(_CATALOG_DB, uid)
+    if not user:
+        session.pop('user_id', None)
+        return jsonify(ok=False, login_required=True), 401
+    name = (user.get('name') or user.get('email') or '用户').strip()
+    try:
+        rid = insert_product_review(_CATALOG_DB, product_id, uid, name, body)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, review_id=rid)
+
+
 @app.route('/api/home-widgets')
 def api_home_widgets():
     """首页无刷新更新：返回推荐区与行为列表 HTML 片段（JSON）。"""
@@ -687,7 +804,15 @@ def account():
         flash('会话已失效，请重新登录。', 'info')
         return redirect(url_for('login'))
     tags = list_user_tags(_CATALOG_DB, uid)
-    return render_template('account.html', user=user, tags=tags)
+    product_categories = _product_categories_sorted()
+    selected_interest_tags = {str(t['tag']) for t in tags}
+    return render_template(
+        'account.html',
+        user=user,
+        tags=tags,
+        product_categories=product_categories,
+        selected_interest_tags=selected_interest_tags,
+    )
 
 
 if __name__ == "__main__":

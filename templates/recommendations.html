@@ -6,7 +6,7 @@
     <title>为您推荐 · Shopping Platform</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body>
+<body data-current-user-id="{{ rec_user_id }}">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     <div class="flash-stack" role="status">
@@ -45,11 +45,11 @@
     <main class="main-content">
         <section class="hero">
             <h1>为您推荐</h1>
-            <p class="hero-sub">根据您在首页浏览、购买所积累的<strong>兴趣标签</strong>（与商品类目对应），在相应类目下为您挑选商品。</p>
+            <p class="hero-sub">根据您在<strong>用户中心勾选的类目</strong>以及首页浏览、购买所积累的<strong>兴趣标签权重</strong>，在相应类目下为您挑选商品。</p>
         </section>
 
         {% if recommended.empty %}
-        <p class="empty-state">暂无推荐：请先在首页浏览或购买商品以积累兴趣标签，再返回本页查看。</p>
+        <p class="empty-state">暂无推荐：请先在<strong>用户中心</strong>选择兴趣类目，或在首页浏览、购买商品以积累标签权重，再返回本页查看。</p>
         {% else %}
         <div class="product-grid recommend-rec-grid">
             {% for product in recommended.itertuples() %}
@@ -66,6 +66,7 @@
     <footer class="site-footer">
         <p>Shopping Platform · 演示商城</p>
     </footer>
+    {% include '_interest_onboarding.html' %}
     {% include '_live_reload.html' %}
 </body>
 </html>
