@@ -70,6 +70,35 @@
             {% endif %}
             <p class="account-panel__back"><a href="{{ url_for('index') }}">返回首页</a></p>
         </section>
+        <section class="panel account-panel">
+            <h2>LLM 用户画像</h2>
+            <p class="account-tags__hint">点击后将基于当前账号的浏览/购买行为、相关商品信息与已发布评论生成结构化画像（JSON）。</p>
+            <div class="account-interest-form__actions">
+                <button
+                    type="button"
+                    class="btn btn-primary"
+                    id="profile-generate-btn"
+                    {% if not llm_enabled %}disabled title="请先在 .env 中配置 API 密钥（通义需同时配置 LLM_API_BASE）"{% endif %}
+                >
+                    生成用户画像
+                </button>
+            </div>
+            <p class="account-interest-form__msg" id="profile-generate-msg" hidden></p>
+            <p class="account-tags__hint" id="profile-summary-output" hidden></p>
+            <pre id="profile-json-output" style="white-space: pre-wrap; word-break: break-word; background:#0b1020; color:#d7e3ff; border-radius:12px; padding:14px; margin-top:12px; max-height:360px; overflow:auto;" hidden></pre>
+            <details id="profile-evidence-panel" style="margin-top: 12px;" hidden>
+                <summary style="cursor:pointer;">查看本次喂给 LLM 的证据预览</summary>
+                <pre id="profile-evidence-output" style="white-space: pre-wrap; word-break: break-word; background:#0b1020; color:#d7e3ff; border-radius:12px; padding:14px; margin-top:8px; max-height:300px; overflow:auto;"></pre>
+            </details>
+            {% if latest_profile %}
+            <h3 class="account-tags__sub">最近已保存版本</h3>
+            <p class="account-tags__hint">版本 ID {{ latest_profile.profile_id }} · {{ latest_profile.created_at }} · 来源 {{ latest_profile.source }}</p>
+            {% if latest_profile_summary %}
+            <p class="account-tags__hint"><strong>一句话画像：</strong>{{ latest_profile_summary }}</p>
+            {% endif %}
+            <pre id="latest-profile-json" style="white-space: pre-wrap; word-break: break-word; background:#0b1020; color:#d7e3ff; border-radius:12px; padding:14px; margin-top:8px; max-height:260px; overflow:auto;">{{ latest_profile_pretty }}</pre>
+            {% endif %}
+        </section>
     </main>
     <footer class="site-footer">
         <p>Shopping Platform · 演示商城</p>
@@ -121,6 +150,95 @@
           })
           .catch(function (err) {
             setMsg((err && err.message) || '保存失败，请稍后重试。', true);
+          });
+      });
+    })();
+    </script>
+    <script>
+    (function () {
+      var btn = document.getElementById('profile-generate-btn');
+      var msg = document.getElementById('profile-generate-msg');
+      var summaryOut = document.getElementById('profile-summary-output');
+      var out = document.getElementById('profile-json-output');
+      var evidencePanel = document.getElementById('profile-evidence-panel');
+      var evidenceOut = document.getElementById('profile-evidence-output');
+      var api = {{ url_for('api_profile_extract') | tojson }};
+      if (!btn) return;
+
+      function setMsg(text, isErr) {
+        if (!msg) return;
+        if (!text) {
+          msg.hidden = true;
+          msg.textContent = '';
+          msg.classList.remove('is-error');
+          return;
+        }
+        msg.hidden = false;
+        msg.textContent = text;
+        msg.classList.toggle('is-error', !!isErr);
+      }
+
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        setMsg('正在调用 LLM 生成画像，请稍候…', false);
+        if (summaryOut) {
+          summaryOut.hidden = true;
+          summaryOut.textContent = '';
+        }
+        if (out) {
+          out.hidden = true;
+          out.textContent = '';
+        }
+        if (evidencePanel) evidencePanel.hidden = true;
+        if (evidenceOut) evidenceOut.textContent = '';
+        fetch(api, {
+          method: 'POST',
+          credentials: 'same-origin',
+        })
+          .then(function (r) {
+            return r.json().then(function (j) {
+              return { ok: r.ok, status: r.status, j: j };
+            });
+          })
+          .then(function (res) {
+            btn.disabled = false;
+            if (res.status === 401 || (res.j && res.j.login_required)) {
+              window.location.href = {{ url_for('login', next=request.full_path) | tojson }};
+              return;
+            }
+            if (!res.ok || !res.j.ok) {
+              throw new Error((res.j && res.j.error) || ('请求失败(' + res.status + ')'));
+            }
+            setMsg(
+              '生成成功：标签 ' + (res.j.inputs && res.j.inputs.selected_interest_tag_lines || 0) +
+              ' 条，行为 ' + (res.j.inputs && res.j.inputs.interaction_lines || 0) +
+              ' 条，商品 ' + (res.j.inputs && res.j.inputs.product_lines || 0) +
+              ' 条，评论 ' + (res.j.inputs && res.j.inputs.review_lines || 0) +
+              ' 条。画像已自动保存（版本 ID ' + (res.j.profile_id || '-') + '）。',
+              false
+            );
+            if (summaryOut && res.j.profile_summary) {
+              summaryOut.hidden = false;
+              summaryOut.innerHTML = '<strong>一句话画像：</strong>' + res.j.profile_summary;
+            }
+            if (out) {
+              out.hidden = false;
+              out.textContent = JSON.stringify(res.j.profile || {}, null, 2);
+            }
+            if (evidencePanel && evidenceOut) {
+              var ev = res.j.evidence_preview || {};
+              var previewText =
+                '[Selected interest tags]\n' + (ev.selected_interest_tags || '(empty)') + '\n\n' +
+                '[Interaction history]\n' + (ev.interaction_history || '(empty)') + '\n\n' +
+                '[Product information]\n' + (ev.product_information || '(empty)') + '\n\n' +
+                '[User reviews]\n' + (ev.reviews_text || '(empty)');
+              evidenceOut.textContent = previewText;
+              evidencePanel.hidden = false;
+            }
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            setMsg((err && err.message) || '生成失败，请稍后重试。', true);
           });
       });
     })();

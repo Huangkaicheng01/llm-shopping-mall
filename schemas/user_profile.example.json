@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "generated_at": "2026-04-26T12:00:00+08:00",
+    "model": "gpt-4o-mini",
+    "prompt_version": "profile_build_v1",
+    "locale": "zh-CN"
+  },
+  "long_term_preferences": {
+    "preferred_categories": [
+      {
+        "category": "电子产品",
+        "confidence": 0.82,
+        "evidence": ["click:1", "purchase:25", "search:轻薄本编程"],
+        "last_updated": "2026-04-25",
+        "notes": "偏办公与升级配件"
+      }
+    ],
+    "preferred_brands": [],
+    "stable_attributes": [
+      {
+        "key": "quality_priority",
+        "value": "更在意耐用与售后",
+        "confidence": 0.55,
+        "notes": "来自评论与商品描述中的售后相关表述"
+      }
+    ]
+  },
+  "short_term_preferences": {
+    "recent_focus": [
+      {
+        "topic": "笔记本扩展与桌面外设",
+        "confidence": 0.7,
+        "evidence": ["click:16", "click:21"]
+      }
+    ],
+    "temporary_intentions": [
+      {
+        "intent": "近期想配齐居家办公桌面",
+        "confidence": 0.6,
+        "evidence": ["search:显示器 键盘"]
+      }
+    ]
+  },
+  "price_sensitivity": {
+    "level": "medium",
+    "typical_price_band_cny": { "min": 100, "max": 2000 },
+    "notes": "数码大件会拉长决策"
+  },
+  "style_preference": {
+    "tags": ["极简", "实用"],
+    "notes": "服饰类偏好基础款"
+  },
+  "disliked_features": [
+    {
+      "kind": "scenario",
+      "text": "不接受明显夸大宣传的功能描述",
+      "confidence": 0.4
+    }
+  ],
+  "conflicts": [],
+  "drift": {
+    "detected": false
+  },
+  "open_questions": [
+    "是否需要兼容苹果生态（M 系列 / 雷电接口）？"
+  ]
+}

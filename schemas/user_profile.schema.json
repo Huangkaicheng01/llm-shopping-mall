@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/user_profile.schema.json",
+  "title": "UserProfile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "long_term_preferences",
+    "short_term_preferences",
+    "price_sensitivity",
+    "style_preference",
+    "disliked_features"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "画像结构版本，便于迁移与对照实验。"
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "生成元信息，用于复现实验与审计。",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "画像生成时间（ISO 8601）。"
+        },
+        "model": {
+          "type": "string",
+          "description": "使用的 LLM 模型名（若未知可填 unknown）。"
+        },
+        "prompt_version": {
+          "type": "string",
+          "description": "Prompt 或流水线版本号，如 profile_build_v2。"
+        },
+        "locale": {
+          "type": "string",
+          "default": "zh-CN",
+          "description": "画像语言/区域，默认 zh-CN。"
+        }
+      }
+    },
+    "long_term_preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preferred_categories", "preferred_brands", "stable_attributes"],
+      "description": "跨会话、相对稳定偏好。类目必须与商品库 category 一致（由系统在 Prompt 中注入允许列表）。",
+      "properties": {
+        "preferred_categories": {
+          "type": "array",
+          "description": "长期偏好的商品类目。每项 category 必须严格属于允许类目；无证据则 confidence 应偏低。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["category", "confidence"],
+            "properties": {
+              "category": {
+                "type": "string",
+                "minLength": 1,
+                "description": "与 products.category 完全一致的字符串（运行时白名单校验）。"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "0–1，综合行为频次、时效与文本证据的可信度。"
+              },
+              "evidence": {
+                "type": "array",
+                "description": "简短证据引用，便于解释与调试。格式建议：action:product_id、review:review_id、search:原文摘要。",
+                "items": { "type": "string", "maxLength": 200 }
+              },
+              "last_updated": {
+                "type": "string",
+                "format": "date",
+                "description": "该条目最近一次被证据强化的日期（若无明确日期可省略）。"
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 500,
+                "description": "可选：对该类目偏好的补充说明（中文）。"
+              }
+            }
+          }
+        },
+        "preferred_brands": {
+          "type": "array",
+          "description": "当前商品表无独立 brand 字段：若无把握请保持 []；若从 title/description 推断品牌，须设 inferred=true 且 confidence≤0.5。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "inferred", "confidence"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "inferred": {
+                "type": "boolean",
+                "description": "true 表示非库内字段、由文本推断。"
+              },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "evidence": {
+                "type": "array",
+                "items": { "type": "string", "maxLength": 200 }
+              }
+            }
+          }
+        },
+        "stable_attributes": {
+          "type": "array",
+          "description": "与类目无关或跨类目的稳定取向，用键值对表达，便于检索与冲突检测。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "value", "confidence"],
+            "properties": {
+              "key": {
+                "type": "string",
+                "enum": [
+                  "quality_priority",
+                  "logistics_sensitivity",
+                  "after_sales_sensitivity",
+                  "eco_conscious",
+                  "tech_savvy",
+                  "gift_or_self_use",
+                  "other"
+                ],
+                "description": "语义槽位名；不确定用 other 并在 notes 说明。"
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "该维度的取值描述（中文短语或短句）。"
+              },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "notes": { "type": "string", "maxLength": 300 }
+            }
+          }
+        }
+      }
+    },
+    "short_term_preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recent_focus", "temporary_intentions"],
+      "description": "近期或当前情境下的意图，应允许较快衰减或被新会话覆盖。",
+      "properties": {
+        "recent_focus": {
+          "type": "array",
+          "description": "由最近若干次点击/购买/搜索归纳的主题或子需求（可与类目不同粒度）。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["topic", "confidence"],
+            "properties": {
+              "topic": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "evidence": {
+                "type": "array",
+                "items": { "type": "string", "maxLength": 200 }
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "可选：预期失效时间；无则依赖系统策略衰减。"
+              }
+            }
+          }
+        },
+        "temporary_intentions": {
+          "type": "array",
+          "description": "当前会话或最近一次查询的即时意图（如送礼、急用、比价）。",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["intent", "confidence"],
+            "properties": {
+              "intent": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "evidence": {
+                "type": "array",
+                "items": { "type": "string", "maxLength": 200 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "price_sensitivity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level"],
+      "description": "价格敏感度结构化表达，便于与 price 区间检索结合。",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "unknown"],
+          "description": "low 偏低价/性价比；high 愿为品质或品牌付溢价；unknown 表示信息不足。"
+        },
+        "typical_price_band_cny": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "用户常购或常浏览的粗略人民币价格带（可选）。",
+          "properties": {
+            "min": { "type": "number", "minimum": 0 },
+            "max": { "type": "number", "minimum": 0 }
+          }
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "补充说明，如「大促才买贵价数码」等。"
+        }
+      }
+    },
+    "style_preference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tags"],
+      "description": "风格/审美偏好：标签数组便于检索；notes 承载自由文本。",
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "maxItems": 20,
+          "description": "简短中文标签，如 极简、运动、国风、商务。"
+        },
+        "notes": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "disliked_features": {
+      "type": "array",
+      "description": "明确排斥的属性、场景或品类（若写类目须仍属允许类目列表，或与系统屏蔽类目对齐）。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "text", "confidence"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["attribute", "category", "scenario", "other"],
+            "description": "category 时 text 建议为与 products.category 一致的类目名。"
+          },
+          "text": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 200 }
+          }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "description": "可选：检测到的偏好矛盾及建议处理（供动态更新与可解释性）。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "resolution_hint"],
+        "properties": {
+          "summary": { "type": "string", "maxLength": 400 },
+          "resolution_hint": { "type": "string", "maxLength": 400 }
+        }
+      }
+    },
+    "drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "可选：相对上一版画像的兴趣漂移摘要。",
+      "properties": {
+        "detected": { "type": "boolean" },
+        "from_summary": { "type": "string", "maxLength": 300 },
+        "to_summary": { "type": "string", "maxLength": 300 },
+        "reason": { "type": "string", "maxLength": 400 }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "description": "可选：信息不足时建议系统或用户补充的澄清点。",
+      "items": { "type": "string", "maxLength": 200 },
+      "maxItems": 10
+    }
+  }
+}

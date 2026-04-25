@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS user_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_tags_user ON user_tags(user_id);
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    profile_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    profile_json TEXT NOT NULL,
+    summary_text TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'llm',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_created
+ON user_profiles(user_id, created_at DESC);
 """
 
 
@@ -53,6 +66,9 @@ def init_auth_db(db_path: Path) -> None:
         conn.execute('PRAGMA foreign_keys = ON')
         conn.executescript(AUTH_SCHEMA)
         _migrate_users_interest_onboarding(conn)
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(user_profiles)').fetchall()}
+        if cols and 'summary_text' not in cols:
+            conn.execute("ALTER TABLE user_profiles ADD COLUMN summary_text TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
 
@@ -185,3 +201,81 @@ def get_password_hash_for_login(db_path: Path, email: str) -> tuple[int, str] | 
     if not row:
         return None
     return int(row[0]), str(row[1])
+
+
+def save_user_profile(
+    db_path: Path,
+    user_id: int,
+    profile_json: str,
+    source: str = 'llm',
+    summary_text: str = '',
+) -> int:
+    """保存一版用户画像 JSON，返回 profile_id。"""
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO user_profiles (user_id, profile_json, source, summary_text)
+            VALUES (?, ?, ?, ?)
+            """,
+            (int(user_id), str(profile_json), str(source or 'llm'), str(summary_text or '')),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def update_user_profile_summary(db_path: Path, profile_id: int, summary_text: str) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            'UPDATE user_profiles SET summary_text = ? WHERE profile_id = ?',
+            (str(summary_text or ''), int(profile_id)),
+        )
+        conn.commit()
+
+
+def list_recent_user_profiles(db_path: Path, user_id: int, limit: int = 10) -> list[dict[str, Any]]:
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT profile_id, profile_json, summary_text, source, created_at
+            FROM user_profiles
+            WHERE user_id = ?
+            ORDER BY profile_id DESC
+            LIMIT ?
+            """,
+            (int(user_id), int(limit)),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        out.append(
+            {
+                'profile_id': int(r[0]),
+                'profile_json': str(r[1]),
+                'summary_text': str(r[2] or ''),
+                'source': str(r[3]),
+                'created_at': str(r[4]),
+            }
+        )
+    return out
+
+
+def get_latest_user_profile(db_path: Path, user_id: int) -> dict[str, Any] | None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT profile_id, profile_json, summary_text, source, created_at
+            FROM user_profiles
+            WHERE user_id = ?
+            ORDER BY profile_id DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        'profile_id': int(row[0]),
+        'profile_json': str(row[1]),
+        'summary_text': str(row[2] or ''),
+        'source': str(row[3]),
+        'created_at': str(row[4]),
+    }

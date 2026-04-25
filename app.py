@@ -4,6 +4,7 @@ LLM 找货与语义兜底等仍使用 BERT 向量与余弦相似度。
 """
 import json
 import os
+import sqlite3
 from collections import defaultdict
 from functools import wraps
 from pathlib import Path
@@ -21,20 +22,23 @@ from flask import (
     session,
     flash,
 )
-from openai import OpenAI
 import pandas as pd
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from auth_db import (
     bump_user_tag_for_category,
     create_user,
+    get_latest_user_profile,
     get_password_hash_for_login,
     get_user_by_email,
     get_user_by_id,
     init_auth_db,
     list_user_tags,
+    list_recent_user_profiles,
     replace_user_interest_tags,
+    save_user_profile,
     set_interest_onboarding_done,
+    update_user_profile_summary,
 )
 from catalog_db import (
     catalog_db_path,
@@ -44,6 +48,12 @@ from catalog_db import (
     load_products_dataframe,
     seed_demo_product_reviews_if_empty,
     should_reseed_from_env,
+)
+from llm_client import llm_api_base, llm_api_key, llm_call_json, llm_call_text
+from prompt_service import (
+    build_intent_extract_messages,
+    build_profile_preference_extract_messages,
+    build_profile_summary_messages,
 )
 from sklearn.metrics.pairwise import cosine_similarity
 from transformers import pipeline
@@ -170,46 +180,12 @@ def get_embeddings(text):
 products['embeddings'] = products['description'].apply(get_embeddings)
 
 
-# ---------------------------------------------------------------------------
-# 云端 LLM：一句话描述 → 结构化筛选 + 商品列表
-# 大模型 HTTP 调用：用官方 openai 包里的 OpenAI 客户端发请求（与「是否调用 OpenAI 公司」无关）。
-# 未传 base_url 时该库默认连 api.openai.com；传了 LLM_API_BASE 则连通义等任意兼容网关。
-# ---------------------------------------------------------------------------
-def _llm_resolve():
-    """
-    返回 (api_key, base_url, model)。
-    配置了 LLM_API_BASE 时：密钥优先 LLM_API_KEY，模型优先 LLM_MODEL；未设模型且 host 含 dashscope 时默认 qwen-turbo。
-    未配置 LLM_API_BASE 时：沿用 OPENAI_* 与 OPENAI_API_BASE；未传 base_url 时由 HTTP 客户端默认连 OpenAI 官服。
-    """
-    llm_base = (os.environ.get('LLM_API_BASE') or '').strip().rstrip('/')
-    openai_base = (os.environ.get('OPENAI_API_BASE') or '').strip().rstrip('/')
-
-    if llm_base:
-        api_key = (os.environ.get('LLM_API_KEY') or '').strip()
-        if not api_key:
-            api_key = (os.environ.get('OPENAI_API_KEY') or '').strip()
-        model = (os.environ.get('LLM_MODEL') or os.environ.get('OPENAI_MODEL') or '').strip()
-        if not model:
-            model = 'qwen-turbo' if 'dashscope' in llm_base.lower() else 'gpt-4o-mini'
-        return api_key, llm_base, model
-
-    oa_key = (os.environ.get('OPENAI_API_KEY') or '').strip()
-    lm_key = (os.environ.get('LLM_API_KEY') or '').strip()
-    api_key = oa_key or lm_key
-    model = (os.environ.get('OPENAI_MODEL') or os.environ.get('LLM_MODEL') or 'gpt-4o-mini').strip()
-    return api_key, openai_base, model
-
-
 def _llm_api_key() -> str:
-    return _llm_resolve()[0]
+    return llm_api_key()
 
 
 def _llm_api_base() -> str:
-    return _llm_resolve()[1]
-
-
-def _llm_model() -> str:
-    return _llm_resolve()[2]
+    return llm_api_base()
 
 
 def _normalize_llm_categories(raw_list, allowed):
@@ -233,45 +209,15 @@ def _normalize_llm_categories(raw_list, allowed):
 
 def _call_llm_for_filters(user_text: str) -> dict:
     allowed = sorted(products['category'].unique().tolist())
-    system = (
-        '你是购物网站的检索助手。用户用自然语言描述想买的商品。'
-        '请提取检索条件，只输出一个 JSON 对象，不要 markdown 代码块，不要其它文字。\n'
-        '字段说明：\n'
-        '- "categories": 字符串数组，每项必须严格属于下列「允许类目」之一；不确定则 []。\n'
-        '  允许类目：' + json.dumps(allowed, ensure_ascii=False) + '\n'
-        '- "keywords": 字符串数组，用于在商品标题、描述中做子串匹配，可多个，可 []\n'
-        '- "price_min": 数字或 null，人民币最低价（含）\n'
-        '- "price_max": 数字或 null，人民币最高价（含）\n'
-        '- "explain": 一句中文，简述你如何理解用户需求\n'
+    messages = build_intent_extract_messages(
+        user_text=user_text[:4000],
+        allowed_categories=allowed,
     )
-    api_key, base, model = _llm_resolve()
-    if not api_key:
-        raise RuntimeError('未配置 API 密钥：请在 .env 中设置 OPENAI_API_KEY 或 LLM_API_KEY')
-    lm_key = (os.environ.get('LLM_API_KEY') or '').strip()
-    oa_key = (os.environ.get('OPENAI_API_KEY') or '').strip()
-    oa_base = (os.environ.get('OPENAI_API_BASE') or '').strip()
-    if not base and lm_key and not oa_key and not oa_base:
-        raise RuntimeError(
-            '已配置 LLM_API_KEY，但未配置 LLM_API_BASE（也未配置 OPENAI_API_BASE）。'
-            '未指定网关时请求会发往 OpenAI 官方。使用通义请在 .env 增加：\n'
-            'LLM_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1'
-        )
-    kwargs = {'api_key': api_key}
-    if base:
-        kwargs['base_url'] = base
-    client = OpenAI(**kwargs)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {'role': 'system', 'content': system},
-            {'role': 'user', 'content': user_text[:4000]},
-        ],
-        response_format={'type': 'json_object'},
+    data = llm_call_json(
+        messages=messages,
         temperature=0.15,
         max_tokens=800,
     )
-    raw = (resp.choices[0].message.content or '').strip() or '{}'
-    data = json.loads(raw)
     cats = _normalize_llm_categories(data.get('categories'), allowed)
     kws = []
     for k in data.get('keywords') or []:
@@ -343,6 +289,99 @@ def _products_df_to_json_list(df: pd.DataFrame, limit: int = 10):
             'image': str(r['image']),
         })
     return out
+
+
+def _build_interaction_history_text(user_id: int, limit: int = 50) -> str:
+    rows = user_activity[user_activity['user_id'] == int(user_id)].tail(limit)
+    if rows.empty:
+        return ''
+    lines = []
+    for _, r in rows.iterrows():
+        pid = int(r['product_id'])
+        action = str(r['action'])
+        title_row = products.loc[products['product_id'] == pid, 'title']
+        title = str(title_row.iloc[0]) if not title_row.empty else '未知商品'
+        lines.append(f'{action}: product_id={pid}, title={title}')
+    return '\n'.join(lines)
+
+
+def _build_product_information_text(user_id: int, limit: int = 30) -> str:
+    rows = user_activity[user_activity['user_id'] == int(user_id)]
+    if rows.empty:
+        return ''
+    ids = [int(x) for x in rows['product_id'].tolist()]
+    # 按最近交互顺序去重，截断以控制 token。
+    dedup_ids = list(dict.fromkeys(reversed(ids)))
+    selected = dedup_ids[:limit]
+    lines = []
+    for pid in selected:
+        p = products.loc[products['product_id'] == pid]
+        if p.empty:
+            continue
+        row = p.iloc[0]
+        lines.append(
+            f"product_id={int(row['product_id'])} | title={row['title']} | category={row['category']} | "
+            f"price={float(row['price']):.2f} | description={row['description']}"
+        )
+    return '\n'.join(lines)
+
+
+def _build_reviews_text(user_id: int, limit: int = 30) -> str:
+    with sqlite3.connect(_CATALOG_DB) as conn:
+        rows = conn.execute(
+            """
+            SELECT r.review_id, r.product_id, r.body, r.created_at, p.title
+            FROM product_reviews r
+            JOIN products p ON p.product_id = r.product_id
+            WHERE r.user_id = ?
+            ORDER BY r.review_id DESC
+            LIMIT ?
+            """,
+            (int(user_id), int(limit)),
+        ).fetchall()
+    if not rows:
+        return ''
+    lines = []
+    for rid, pid, body, created_at, title in rows:
+        lines.append(f'review_id={rid}, product_id={pid}, title={title}, at={created_at}, body={body}')
+    return '\n'.join(lines)
+
+
+def _build_selected_interest_tags_text(user_id: int) -> str:
+    """显式兴趣标签证据：来自 user_tags（含权重与更新时间）。"""
+    rows = list_user_tags(_CATALOG_DB, int(user_id))
+    if not rows:
+        return ''
+    lines = []
+    for r in rows:
+        tag = str(r.get('tag') or '').strip()
+        weight = int(r.get('weight') or 0)
+        updated = str(r.get('updated_at') or '')
+        lines.append(f'tag={tag}, weight={weight}, updated_at={updated}')
+    return '\n'.join(lines)
+
+
+def _clip_preview(text: str, max_chars: int = 1200) -> str:
+    s = (text or '').strip()
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars] + '\n...(truncated)'
+
+
+def _build_profile_history_text(user_id: int, limit: int = 8) -> str:
+    rows = list_recent_user_profiles(_CATALOG_DB, int(user_id), limit=limit)
+    if not rows:
+        return ''
+    parts = []
+    for r in rows:
+        summary = (r.get('summary_text') or '').strip()
+        body = (r.get('profile_json') or '').strip()
+        parts.append(
+            f"## profile_id={r.get('profile_id')} created_at={r.get('created_at')} source={r.get('source')}\n"
+            + (f"summary={summary}\n" if summary else "")
+            + body
+        )
+    return '\n\n'.join(parts)
 
 
 def recommend_products(user_id, top_n=5):
@@ -463,6 +502,93 @@ def api_llm_recommend():
         used_semantic_fallback=used_semantic,
         llm_error=llm_error,
     )
+
+
+@app.route('/api/profile-extract', methods=['POST'])
+@login_required
+def api_profile_extract():
+    """根据当前用户的行为、相关商品与评论，调用 LLM 生成结构化用户画像。"""
+    if not _llm_api_key():
+        return jsonify(
+            ok=False,
+            error='未配置 API 密钥。请在 .env 填写 OPENAI_API_KEY 或 LLM_API_KEY；使用通义时还需 LLM_API_BASE（见 .env.example）',
+        ), 503
+
+    uid = int(session['user_id'])
+    allowed = _product_categories_sorted()
+    selected_interest_tags = _build_selected_interest_tags_text(uid)
+    interaction_history = _build_interaction_history_text(uid)
+    product_information = _build_product_information_text(uid)
+    reviews_text = _build_reviews_text(uid)
+    try:
+        messages = build_profile_preference_extract_messages(
+            allowed_categories=allowed,
+            selected_interest_tags=selected_interest_tags,
+            interaction_history=interaction_history,
+            product_information=product_information,
+            reviews_text=reviews_text,
+        )
+        profile = llm_call_json(messages=messages, temperature=0.2, max_tokens=2200)
+    except Exception as exc:
+        return jsonify(ok=False, error=f'画像生成失败：{exc}'), 502
+
+    summary_text = ''
+    saved_profile_id = None
+    try:
+        profile_text = json.dumps(profile, ensure_ascii=False)
+        saved_profile_id = save_user_profile(
+            _CATALOG_DB,
+            uid,
+            profile_text,
+            source='llm_profile_extract_auto',
+            summary_text='',
+        )
+        history_text = _build_profile_history_text(uid, limit=8)
+        summary_messages = build_profile_summary_messages(history_profiles_text=history_text)
+        summary_text = llm_call_text(summary_messages, temperature=0.2, max_tokens=120)[:200]
+        if summary_text and saved_profile_id is not None:
+            update_user_profile_summary(_CATALOG_DB, saved_profile_id, summary_text)
+    except Exception:
+        # 画像主体已生成，不因自动保存或摘要失败中断主流程。
+        pass
+
+    return jsonify(
+        ok=True,
+        profile=profile,
+        profile_id=saved_profile_id,
+        profile_summary=summary_text,
+        inputs={
+            'selected_interest_tag_lines': 0 if not selected_interest_tags else len(selected_interest_tags.splitlines()),
+            'interaction_lines': 0 if not interaction_history else len(interaction_history.splitlines()),
+            'product_lines': 0 if not product_information else len(product_information.splitlines()),
+            'review_lines': 0 if not reviews_text else len(reviews_text.splitlines()),
+        },
+        evidence_preview={
+            'selected_interest_tags': _clip_preview(selected_interest_tags),
+            'interaction_history': _clip_preview(interaction_history),
+            'product_information': _clip_preview(product_information),
+            'reviews_text': _clip_preview(reviews_text),
+        },
+    )
+
+
+@app.route('/api/profile-save', methods=['POST'])
+@login_required
+def api_profile_save():
+    """保存前端确认后的画像 JSON 到 user_profiles。"""
+    if not request.is_json:
+        return jsonify(ok=False, error='请使用 Content-Type: application/json'), 400
+    data = request.get_json(silent=True) or {}
+    profile = data.get('profile')
+    if not isinstance(profile, dict):
+        return jsonify(ok=False, error='profile 须为 JSON 对象'), 400
+    uid = int(session['user_id'])
+    try:
+        profile_text = json.dumps(profile, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error='profile 不是可序列化的 JSON 对象'), 400
+    pid = save_user_profile(_CATALOG_DB, uid, profile_text, source='llm_profile_extract')
+    return jsonify(ok=True, profile_id=pid)
 
 
 def _product_exists(product_id: int) -> bool:
@@ -804,14 +930,31 @@ def account():
         flash('会话已失效，请重新登录。', 'info')
         return redirect(url_for('login'))
     tags = list_user_tags(_CATALOG_DB, uid)
+    latest_profile = get_latest_user_profile(_CATALOG_DB, uid)
     product_categories = _product_categories_sorted()
     selected_interest_tags = {str(t['tag']) for t in tags}
+    latest_profile_dict = None
+    latest_profile_pretty = ''
+    latest_profile_summary = ''
+    if latest_profile:
+        try:
+            latest_profile_dict = json.loads(latest_profile.get('profile_json') or '{}')
+            latest_profile_pretty = json.dumps(latest_profile_dict, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError):
+            latest_profile_dict = None
+            latest_profile_pretty = latest_profile.get('profile_json') or ''
+        latest_profile_summary = str(latest_profile.get('summary_text') or '').strip()
     return render_template(
         'account.html',
         user=user,
         tags=tags,
         product_categories=product_categories,
         selected_interest_tags=selected_interest_tags,
+        llm_enabled=bool(_llm_api_key()),
+        latest_profile=latest_profile,
+        latest_profile_dict=latest_profile_dict,
+        latest_profile_pretty=latest_profile_pretty,
+        latest_profile_summary=latest_profile_summary,
     )
 
 
